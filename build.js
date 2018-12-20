@@ -4647,9 +4647,11 @@ var expressionReplacerFactory = function (
  * 替换当前节点属性、静态模板中使用的作用域变量，如果有
  * @param { astNode } nodeAst 节点词法树
  */
-var replaceVarStr = function (nodeAst) {
-  if (!nodeAst.replaceTarget) { return nodeAst }
-  var replaceTarget = nodeAst.replaceTarget;
+var replaceVarStr = function (nodeAst, options) {
+  if ( options === void 0 ) options = {};
+
+  var replaceTarget = options.replaceTarget;
+  if (!replaceTarget) { return nodeAst }
   var replacer = replaceSlotScopeVar(replaceTarget, '$scopedata');
   var expressionReplacer = expressionReplacerFactory(
     replaceTarget,
@@ -4780,7 +4782,6 @@ var component = {
 };
 
 var tag = function (ast, options) {
-  var fromSlotScope = ast.fromSlotScope;
   var tag = ast.tag;
   var elseif = ast.elseif;
   var elseText = ast.else;
@@ -4788,6 +4789,7 @@ var tag = function (ast, options) {
   var staticClass = ast.staticClass; if ( staticClass === void 0 ) staticClass = '';
   var attrsMap = ast.attrsMap; if ( attrsMap === void 0 ) attrsMap = {};
   var components = options.components;
+  var fromSlotScope = options.fromSlotScope;
   var ifText = attrsMap['v-if'];
   var href = attrsMap.href;
   var bindHref = attrsMap['v-bind:href'];
@@ -4887,12 +4889,12 @@ function convertAst (node, options, util) {
   var components = options.components;
   wxmlAst.tag = tagName = tagName ? hyphenate(tagName) : tagName;
   // 跟随迭代过程，保留slotScope变量名，用于 slot.wxml 中替换变量名，以实现于vue slot-scope 变量使用一致
-  var replaceTarget = node.fromSlotScope;
+  var replaceTarget = options.fromSlotScope;
   if (typeof replaceTarget !== 'string') {
     replaceTarget = false;
   }
   // 自身没有作用域属性，从上级取
-  replaceTarget = replaceTarget || node.replaceTarget;
+  replaceTarget = replaceTarget || options.replaceTarget;
 
   // 引入 import, isSlot 是使用 slot 的编译地方，意即 <slot></slot> 的地方
   var isSlot = tagName === 'slot';
@@ -4931,11 +4933,11 @@ function convertAst (node, options, util) {
     var isDefault = slotName === 'default';
     var slotId = moduleId + "-" + slotName + "-" + (mpcomid.replace(/\'/g, ''));
     // 子组件标识 fromSlotScope
-    var children = (multiItem ? item : [item]).map(function (item) { return Object.assign({}, item, { fromSlotScope: item.slotScope || true }); });
+    var children = (multiItem ? item : [item]);
     var node = isDefault ? { tag: 'template', attrsMap: {}, children: children } : item;
     node.attrsMap.name = slotId;
     delete node.attrsMap.slot;
-    scopedSlots[slotId] = { node: convertAst(node, options, util), name: slotName, slotId: slotId };
+    scopedSlots[slotId] = { node: convertAst(node, Object.assign({}, options, { fromSlotScope: item.slotScope || true }), util), name: slotName, slotId: slotId };
     wxmlAst.slots[slotName] = slotId;
   });
 
@@ -4974,8 +4976,12 @@ function convertAst (node, options, util) {
   wxmlAst = attrs.convertAttr(wxmlAst, log);
   if (children && !isSlot) {
     // 中转 scopedSlot，可能得到空children，进行过滤
-    wxmlAst.children = children.filter(function (_) { return _; }).map(function (k) { return convertAst(replaceVarStr(Object.assign({}, k, { replaceTarget: replaceTarget })), options, util); }
-    );
+    wxmlAst.children = children.filter(function (_) { return _; }).map(function (k) {
+      /** 向下迭代 replaceTarget， 用于标识作用域模板中可替换的变量
+       *  replaceVarStr 替换astNode中属性text等绑定变量的作用域变量*/
+      var nextOptions = Object.assign({}, options, { replaceTarget: replaceTarget });
+      return convertAst(replaceVarStr(k, nextOptions), nextOptions, util)
+    });
   }
 
   if (ifConditions) {
