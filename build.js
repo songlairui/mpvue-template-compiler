@@ -2261,12 +2261,14 @@ function processSlot (el) {
       );
     }
   } else {
+    // 添加slotScope属性，vue 2.5+
+    el.slotScope = getAndRemoveAttr(el, 'slot-scope');
     var slotTarget = getBindingAttr(el, 'slot');
     if (slotTarget) {
       el.slotTarget = slotTarget === '""' ? '"default"' : slotTarget;
-    }
-    if (el.tag === 'template') {
-      el.slotScope = getAndRemoveAttr(el, 'scope');
+      if (el.tag !== 'template' && !el.slotScope) {
+        addAttr(el, 'slot', slotTarget);
+      }
     }
   }
 }
@@ -2810,10 +2812,13 @@ var observerState = {
  * object's property keys into getter/setters that
  * collect dependencies and dispatches updates.
  */
-var Observer = function Observer (value) {
+var Observer = function Observer (value, key) {
   this.value = value;
   this.dep = new Dep();
   this.vmCount = 0;
+  if (key) {
+    this.key = key;
+  }
   def(value, '__ob__', this);
   if (Array.isArray(value)) {
     var augment = hasProto
@@ -2876,7 +2881,7 @@ function copyAugment (target, src, keys) {
  * returns the new observer if successfully observed,
  * or the existing observer if the value already has one.
  */
-function observe (value, asRootData) {
+function observe (value, asRootData, key) {
   if (!isObject(value)) {
     return
   }
@@ -2890,7 +2895,9 @@ function observe (value, asRootData) {
     Object.isExtensible(value) &&
     !value._isVue
   ) {
-    ob = new Observer(value);
+    ob = new Observer(value, key);
+    ob.__keyPath = ob.__keyPath ? ob.__keyPath : {};
+    ob.__keyPath[key] = true;
   }
   if (asRootData && ob) {
     ob.vmCount++;
@@ -2919,7 +2926,7 @@ function defineReactive$$1 (
   var getter = property && property.get;
   var setter = property && property.set;
 
-  var childOb = !shallow && observe(val);
+  var childOb = !shallow && observe(val, undefined, key);
   Object.defineProperty(obj, key, {
     enumerable: true,
     configurable: true,
@@ -2942,6 +2949,7 @@ function defineReactive$$1 (
       if (newVal === value || (newVal !== newVal && value !== value)) {
         return
       }
+
       /* eslint-enable no-self-compare */
       if (process.env.NODE_ENV !== 'production' && customSetter) {
         customSetter();
@@ -2951,8 +2959,10 @@ function defineReactive$$1 (
       } else {
         val = newVal;
       }
-      childOb = !shallow && observe(newVal);
+      childOb = !shallow && observe(newVal, undefined, key);
       dep.notify();
+      obj.__keyPath = obj.__keyPath ? obj.__keyPath : {};
+      obj.__keyPath[key] = true;
     }
   });
 }
@@ -2985,6 +2995,11 @@ function set (target, key, val) {
     return val
   }
   defineReactive$$1(ob.value, key, val);
+  // Vue.set 添加对象属性，渲染时候把 val 传给小程序渲染
+  if (!target.__keyPath) {
+    target.__keyPath = {};
+  }
+  target.__keyPath[key] = true;
   ob.dep.notify();
   return val
 }
@@ -3546,7 +3561,7 @@ function genScopedSlot (
   if (el.for && !el.forProcessed) {
     return genForScopedSlot(key, el, state)
   }
-  return "{key:" + key + ",fn:function(" + (String(el.attrsMap.scope)) + "){" +
+  return "{key:" + key + ",fn:function(" + (String(el.slotScope)) + "){" +
     "return " + (el.tag === 'template'
       ? genChildren(el, state) || 'void 0'
       : genElement(el, state)) + "}}"
@@ -4563,6 +4578,117 @@ var attrs = {
   }
 };
 
+/**
+ * 替换模板中的变量名为约定变量名
+ * @param {string} alias 模板变量名
+ * @param {string} aliasFull 约定变量名
+ */
+var replaceVarSimple = function (alias, aliasFull) { return function (str) { return str
+    .replace(new RegExp(("^" + alias + "$")), aliasFull)
+    .replace(new RegExp(("\\." + alias + "\\."), 'g'), ("." + aliasFull + "."))
+    .replace(new RegExp(("'" + alias + "'"), 'g'), ("'" + aliasFull + "'"))
+    .replace(new RegExp(("^" + alias + "\\.")), (aliasFull + "."))
+    .replace(new RegExp(("\\." + alias + "$")), ("." + aliasFull)); }; };
+/**
+ * 替换 astMap 属性中的变量名为约定变量名
+ * @param {string} alias 模板变量名
+ * @param {string} aliasFull 约定变量名
+ */
+var replaceSlotScopeVar = function (alias, aliasFull) { return function (str) { return str
+    .replace(new RegExp(("^" + alias + "$")), aliasFull)
+    .replace(new RegExp(("^" + alias + "\\.")), (aliasFull + ".")); }; };
+/**
+ * 替换 astMap 静态模板部分中的变量名为约定变量名
+ * @param {string} alias 模板变量名
+ * @param {string} aliasFull 约定变量名
+ */
+var replaceTemplateVar = function (alias, aliasFull) { return function (str) {
+  var result = str
+    .replace(new RegExp(("^\\(" + alias + "\\)"), 'g'), ("(" + aliasFull + ")"))
+    .replace(new RegExp(("^\\(" + alias + "\\."), 'g'), ("(" + aliasFull + "."));
+  return result
+}; };
+/**
+ * 使用替换参数创建一个用于生成{expression, text}的方法，简化调用
+ * @param {string} target 模板变量名
+ * @param {string} using 约定变量名
+ * @returns { expression, text }
+ */
+var expressionReplacerFactory = function (
+  target,
+  using
+) {
+  if ( using === void 0 ) using = '$scopedata';
+
+  return function (expression) {
+  var arr = expression.split(/(\(.*?\))/g);
+  var textArr = arr.slice();
+  var replacer = replaceTemplateVar(target, using);
+  var result = arr
+    .map(function (str, idx) {
+      if (!/^\(.*?\)$/.test(str)) { return }
+      var mainStr = replacer(str);
+      textArr[idx] = "(`" + (mainStr.slice(1, mainStr.length - 1)) + "`)";
+      return ("" + (replacer(str)))
+    })
+    .join('');
+  var text = '';
+  var _s = function (str) { return ("{{ " + str + " }}"); };
+  try {
+    text = eval(textArr.join('').replace(/\n/g, '\\n'));
+  } catch (e) {
+    console.info(_s(text), e);
+  }
+  return { expression: result, text: text }
+};
+};
+
+/**
+ * 替换当前节点属性、静态模板中使用的作用域变量，如果有
+ * @param { astNode } nodeAst 节点词法树
+ */
+var replaceVarStr = function (nodeAst) {
+  if (!nodeAst.replaceTarget) { return nodeAst }
+  var replaceTarget = nodeAst.replaceTarget;
+  var replacer = replaceSlotScopeVar(replaceTarget, '$scopedata');
+  var expressionReplacer = expressionReplacerFactory(
+    replaceTarget,
+    '$scopedata'
+  );
+  var cache = {};
+  var attrs = nodeAst.attrs; if ( attrs === void 0 ) attrs = [];
+  var attrsList = nodeAst.attrsList; if ( attrsList === void 0 ) attrsList = [];
+  var attrsMap = nodeAst.attrsMap; if ( attrsMap === void 0 ) attrsMap = {};
+  var getValueWithCache = function (oriValue) {
+    var value;
+    if (cache[oriValue] !== undefined) {
+      value = cache[oriValue];
+    } else {
+      value = replacer(oriValue);
+      cache[oriValue] = value;
+    }
+    return value
+  };
+  var mapFn = function (item) { return Object.assign({}, item, { value: getValueWithCache(item.value) }); };
+  attrs = attrs.map(mapFn);
+  attrsList = attrsList.map(mapFn);
+  var newMap = {};
+  Object.keys(attrsMap).forEach(function (key) {
+    if (!key.startsWith(':')) { return }
+    newMap[key] = getValueWithCache(attrsMap[key]);
+  });
+  var newNode = Object.assign({}, nodeAst, { attrs: attrs, attrsList: attrsList, attrsMap: newMap });
+  // 替换静态内容
+  if (newNode.expression) {
+    var ref = expressionReplacer(newNode.expression);
+    var expression = ref.expression;
+    var text = ref.text;
+    newNode.expression = expression;
+    newNode.text = text || newNode.text;
+  }
+  return newNode
+};
+
 function getSlotsName (obj) {
   if (!obj) {
     return ''
@@ -4601,8 +4727,41 @@ var component = {
     var tag = ast.tag;
     var mpcomid = ast.mpcomid;
     var slots = ast.slots;
+    var attrsList = ast.attrsList;
     if (slotName) {
-      attrsMap['data'] = "{{...$root[$k], $root}}";
+      var ref = ast.parent;
+      var alias = ref.alias;
+      var forName = ref.for;
+      var iterator1 = ref.iterator1;
+      var hasFor = forName && alias;
+      // 有 v-for 的slot-scoped 在原有的 <template data=‘... 上增加作用域数据
+      if (hasFor) {
+        // scope-slot 情况
+        var varRootStr = '$root[$k]';
+        var aliasFull = "['" + forName + "'][" + iterator1 + "]";
+        var $scopeStr = '{ ';
+        var genKeyStr = replaceVarSimple(alias, aliasFull);
+        attrsList.forEach(function (ref) {
+          var name = ref.name;
+          var value = ref.value;
+
+          if (name.startsWith('v-bind')) {
+            var bindTarget = name.slice('v-bind'.length + 1);
+            var pathStr = genKeyStr(value);
+            var varSep = pathStr[0] === '[' ? '' : '.';
+            var bindValStr = varRootStr + varSep + pathStr + ' ,';
+            if (!bindTarget) {
+              $scopeStr += '...' + bindValStr;
+            } else {
+              $scopeStr += bindTarget + ': ' + bindValStr;
+            }
+          }
+        });
+        $scopeStr = $scopeStr.replace(/,?$/, ' }');
+        attrsMap['data'] = "{{ ...$root[$p], ...$root[$k], $root, $scopedata: " + $scopeStr + " }}";
+      } else {
+        attrsMap['data'] = '{{...$root[$p], ...$root[$k], $root}}';
+      }
       // bindedName is available when rendering slot in v-for
       var bindedName = attrsMap['v-bind:name'];
       if(bindedName) {
@@ -4621,6 +4780,7 @@ var component = {
 };
 
 var tag = function (ast, options) {
+  var fromSlotScope = ast.fromSlotScope;
   var tag = ast.tag;
   var elseif = ast.elseif;
   var elseText = ast.else;
@@ -4642,11 +4802,12 @@ var tag = function (ast, options) {
   }
   ast.tag = tagMap[tag] || tag;
 
-  var isSlot = tag === 'slot';
+  var isSlot = tag === 'slot' || ast.slotScope;
 
   if ((ifText || elseif || elseText || forText) && tag === 'template') {
     ast.tag = 'block';
-  } else if (isComponent || isSlot) {
+  } else if (isComponent || (isSlot && !fromSlotScope)) {
+    // scopedSlot 会迭代 普通slot的方法，不需要再用template替换，视为普通view
     var originSlotName = name || 'default';
     var slotName = isSlot ? ("$slot" + originSlotName + " || '" + originSlotName + "'") : undefined;
 
@@ -4720,10 +4881,19 @@ function convertAst (node, options, util) {
   var deps = util.deps;
   var slots = util.slots;
   var slotTemplates = util.slotTemplates;
+  var scopedSlots = util.scopedSlots;
   var wxmlAst = Object.assign({}, node);
   var moduleId = options.moduleId;
   var components = options.components;
   wxmlAst.tag = tagName = tagName ? hyphenate(tagName) : tagName;
+  // 跟随迭代过程，保留slotScope变量名，用于 slot.wxml 中替换变量名，以实现于vue slot-scope 变量使用一致
+  var replaceTarget = node.fromSlotScope;
+  if (typeof replaceTarget !== 'string') {
+    replaceTarget = false;
+  }
+  // 自身没有作用域属性，从上级取
+  replaceTarget = replaceTarget || node.replaceTarget;
+
   // 引入 import, isSlot 是使用 slot 的编译地方，意即 <slot></slot> 的地方
   var isSlot = tagName === 'slot';
   if (isSlot) {
@@ -4751,6 +4921,24 @@ function convertAst (node, options, util) {
 
   // 组件内部的node节点全部是 slot
   wxmlAst.slots = {};
+
+  // 处理 scopedSlot，跟slot逻辑一致，使用普通slot的缓存变量
+  var srcScoped = Object.assign({}, node.scopedSlots);
+  Object.keys(srcScoped).forEach(function (key) {
+    var item = Object.assign({}, srcScoped[key]);
+    var multiItem = Array.isArray(item);
+    var slotName = (item.attrsMap && item.attrsMap.slot) || 'default';
+    var isDefault = slotName === 'default';
+    var slotId = moduleId + "-" + slotName + "-" + (mpcomid.replace(/\'/g, ''));
+    // 子组件标识 fromSlotScope
+    var children = (multiItem ? item : [item]).map(function (item) { return Object.assign({}, item, { fromSlotScope: item.slotScope || true }); });
+    var node = isDefault ? { tag: 'template', attrsMap: {}, children: children } : item;
+    node.attrsMap.name = slotId;
+    delete node.attrsMap.slot;
+    scopedSlots[slotId] = { node: convertAst(node, options, util), name: slotName, slotId: slotId };
+    wxmlAst.slots[slotName] = slotId;
+  });
+
   if (currentIsComponent && children && children.length) {
     // 只检查组件下的子节点（不检查孙子节点）是不是具名 slot，不然就是 default slot
     children
@@ -4785,7 +4973,9 @@ function convertAst (node, options, util) {
   wxmlAst = convertFor(wxmlAst, options);
   wxmlAst = attrs.convertAttr(wxmlAst, log);
   if (children && !isSlot) {
-    wxmlAst.children = children.map(function (k) { return convertAst(k, options, util); });
+    // 中转 scopedSlot，可能得到空children，进行过滤
+    wxmlAst.children = children.filter(function (_) { return _; }).map(function (k) { return convertAst(replaceVarStr(Object.assign({}, k, { replaceTarget: replaceTarget })), options, util); }
+    );
   }
 
   if (ifConditions) {
@@ -4808,16 +4998,22 @@ function wxmlAst (compiled, options, log) {
   var slots = {
     // slotId: nodeAst
   };
+
+  var scopedSlots = {
+    // slotId: scopedSlots
+  };
+
   var slotTemplates = {
   };
 
-  var wxast = convertAst(ast, options, { log: log, deps: deps, slots: slots, slotTemplates: slotTemplates });
-  var children = Object.keys(slotTemplates).map(function (k) { return convertAst(slotTemplates[k], options, { log: log, deps: deps, slots: slots, slotTemplates: slotTemplates }); });
+  var wxast = convertAst(ast, options, { log: log, deps: deps, slots: slots, scopedSlots: scopedSlots, slotTemplates: slotTemplates });
+  var children = Object.keys(slotTemplates).map(function (k) { return convertAst(slotTemplates[k], options, { log: log, deps: deps, slots: slots, scopedSlots: scopedSlots, slotTemplates: slotTemplates }); });
   wxast.children = children.concat(wxast.children);
   return {
     wxast: wxast,
     deps: deps,
-    slots: slots
+    slots: slots,
+    scopedSlots: scopedSlots
   }
 }
 
@@ -4892,6 +5088,7 @@ function compileToWxml (compiled, options) {
   var wxast = ref.wxast;
   var deps = ref.deps; if ( deps === void 0 ) deps = {};
   var slots = ref.slots; if ( slots === void 0 ) slots = {};
+  var scopedSlots = ref.scopedSlots; if ( scopedSlots === void 0 ) scopedSlots = {};
   var code = generate$2(wxast, options);
 
   // 引用子模版
@@ -4904,8 +5101,13 @@ function compileToWxml (compiled, options) {
     slot.code = generate$2(slot.node, options);
   });
 
+  // 生成 scoped slot code
+  Object.keys(scopedSlots).forEach(function (k) {
+    var slot = scopedSlots[k];
+    slot.code = generate$2(slot.node, options);
+  });
   // TODO: 后期优化掉这种暴力全部 import，虽然对性能没啥大影响
-  return { code: code, compiled: compiled, slots: slots, importCode: importCode }
+  return { code: code, compiled: compiled, slots: slots, scopedSlots: scopedSlots, importCode: importCode }
 }
 
 /*  */
