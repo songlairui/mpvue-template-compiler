@@ -682,7 +682,7 @@ var isReservedTag = makeMap(
   'template,script,style,element,content,slot,link,meta,svg,view,' +
   'a,div,img,image,text,span,richtext,input,switch,textarea,spinner,select,' +
   'slider,slider-neighbor,indicator,trisition,trisition-group,canvas,' +
-  'list,cell,header,loading,loading-indicator,refresh,scrollable,scroller,' +
+  'cell,header,loading,loading-indicator,refresh,scrollable,scroller,' +
   'video,web,embed,tabbar,tabheader,datepicker,timepicker,marquee,countdown',
   true
 );
@@ -4153,6 +4153,7 @@ function mark (path, options, deps, iteratorArr) {
 
   var tag = path.tag;
   var children = path.children;
+  var scopedSlots = path.scopedSlots;
   var iterator1 = path.iterator1;
   var events = path.events;
   var directives = path.directives;
@@ -4170,6 +4171,12 @@ function mark (path, options, deps, iteratorArr) {
   if (children && children.length) {
     children.forEach(function (v, i) {
       // const counterIterator = children.slice(0, i).filter(v => v.for).map(v => v.for + '.length').join(`+'-'+`)
+      mark(v, options, deps, currentArr);
+    });
+  }
+  // 递归 scopedSlot
+  if (scopedSlots) {
+    Object.values(scopedSlots).forEach(function (v) {
       mark(v, options, deps, currentArr);
     });
   }
@@ -4694,20 +4701,7 @@ var replaceVarStr = function (nodeAst, options) {
  * 获取检查节点含有变量的绑定属性
  * @param {*} attrsList 节点属性列表
  */
-function getBindings (attrsList) {
-  var bindingAttrs = [];
-  var bingAttr = /^(:|v-bind(:?))/;
-  attrsList.forEach(function (ref) {
-    var name = ref.name;
-    var value = ref.value;
 
-    if (bingAttr.test(name)) {
-      var varName = name.replace(bingAttr, '');
-      bindingAttrs.push({ name: varName, value: value });
-    }
-  });
-  return bindingAttrs
-}
 
 /**
  * 递归查找for数据
@@ -4740,7 +4734,7 @@ function getSlotsName (obj) {
     .join(',')
 }
 
-function tmplateSlotsObj(obj) {
+function tmplateSlotsObj (obj) {
   if (!obj) {
     return []
   }
@@ -4751,6 +4745,47 @@ function tmplateSlotsObj(obj) {
     })
     .join(',');
   return $for ? [("$for:{" + $for + "}")] : []
+}
+
+function tagBindingAttrs (attrsList, closestForNode) {
+  var genKeyStr = function (v) { return v; };
+  if (closestForNode) {
+    // 有 v-for 场景，替换模板中约定的slot-scope。因slot只有一份，采用slot-scope统一成一个的处理方式
+    var alias = closestForNode.alias;
+    var forName = closestForNode.for;
+    var iterator1 = closestForNode.iterator1;
+    var aliasFull = forName + "[" + iterator1 + "]";
+    genKeyStr = replaceVarSimple(alias, aliasFull);
+  }
+  var varRootStr = '$root[$k]';
+  var scopeAttrs = [];
+  attrsList.forEach(function (ref) {
+    var name = ref.name;
+    var value = ref.value;
+
+    var bindTarget = false;
+    if (name.startsWith(':')) {
+      bindTarget = name.slice(1);
+    } else if (name.startsWith('v-bind')) {
+      bindTarget = name.slice('v-bind'.length + 1);
+    } else {
+      // 非动态绑定attr
+      scopeAttrs.push(("name: '" + value + "'"));
+    }
+    if (bindTarget === false) { return }
+    var pathStr = genKeyStr(value);
+    // 区分取变量方式：$root[$k].data 或 $root[$k][idx]
+    var varSep = pathStr[0] === '[' ? '' : '.';
+    var bindValStr = pathStr.startsWith('$scopedata') ? pathStr : ("" + varRootStr + varSep + pathStr);
+    if (bindTarget === '') {
+      // v-bind="data" 情况
+      scopeAttrs.push(("..." + bindValStr));
+    } else {
+      // v-bind:something="varible" 情况
+      scopeAttrs.push((bindTarget + ": " + bindValStr));
+    }
+  });
+  return scopeAttrs
 }
 
 var component = {
@@ -4765,60 +4800,20 @@ var component = {
     var mpcomid = ast.mpcomid;
     var slots = ast.slots;
     var attrsList = ast.attrsList;
+    // 查询最新的 v-for 模板slotScope变量
+    var closestForNode = getClosestFor(ast);
+    // 对于scope，手动添加一份标签上绑定的变量
+    var scopeAttrs = tagBindingAttrs(attrsList, closestForNode);
+    var scopeAttrStr = scopeAttrs.length ? (",$scopedata:{" + (scopeAttrs.join()) + " }") : '';
     if (slotName) {
-      // 检查插槽是否含有绑定数据
-      var hasDataBinding = getBindings(ast.attrsList).length;
-      var closestForNode = getClosestFor(ast);
-      if (hasDataBinding) {
-        var genKeyStr = function (v) { return v; };
-        if (closestForNode) {
-          // 有 v-for 场景，替换模板中约定的slot-scope。因slot只有一份，采用slot-scope统一成一个的处理方式
-          var alias = closestForNode.alias;
-          var forName = closestForNode.for;
-          var iterator1 = closestForNode.iterator1;
-          var aliasFull = forName + "[" + iterator1 + "]";
-          genKeyStr = replaceVarSimple(alias, aliasFull);
-        }
-        var varRootStr = '$root[$k]';
-        var $scopeStr = '{ ';
-        attrsList.forEach(function (ref) {
-          var name = ref.name;
-          var value = ref.value;
-
-          var bindTarget = false;
-          if (name.startsWith(':')) {
-            bindTarget = name.slice(1);
-          } else if (name.startsWith('v-bind')) {
-            bindTarget = name.slice('v-bind'.length + 1);
-          } else {
-            // 非动态绑定attr
-            $scopeStr += "name: '" + value + "' ,";
-          }
-          if (bindTarget === false) { return }
-          var pathStr = genKeyStr(value);
-          // 区分取变量方式：$root[$k].data 或 $root[$k][idx]
-          var varSep = pathStr[0] === '[' ? '' : '.';
-          var bindValStr = "" + varRootStr + varSep + pathStr + " ,";
-          if (bindTarget === '') {
-            // v-bind="data" 情况
-            $scopeStr += "..." + bindValStr;
-          } else {
-            // v-bind:something="varible" 情况
-            $scopeStr += bindTarget + ": " + bindValStr;
-          }
-        });
-        $scopeStr = $scopeStr.replace(/,?$/, ' }');
-        // 有 slot-scoped 在原有的 <template data=‘... 上增加作用域数据，约定使用 '$scopedata' 为替换变量名
-        attrsMap['data'] = "{{ ...$root[$p], ...$root[$k], $root, $scopedata: " + $scopeStr + " }}";
-      } else {
-        attrsMap['data'] = '{{...$root[$p], ...$root[$k], $root}}';
-      }
+      // 有 slot-scoped 在原有的 <template data=‘... 上增加作用域数据，约定使用 '$scopedata' 为替换变量名
+      attrsMap['data'] = "{{...$root[$p], ...$root[$k], $root" + scopeAttrStr + " }}";
       // slotAst 的 'v-bind:name' 不会在attrsList中出现，以此判断当前slot绑定了动态 name
       var bindedName = attrsMap['v-bind:name'];
       if (bindedName) {
-        var alias$1 = closestForNode && closestForNode.alias;
+        var alias = closestForNode && closestForNode.alias;
         // 如果 slot[:name] 在v-for作用域里
-        if (alias$1 && bindedName.startsWith(alias$1) && ['.', '', undefined].includes(bindedName[alias$1.length])) {
+        if (alias && bindedName.startsWith(alias) && ['.', '', undefined].includes(bindedName[alias.length])) {
           attrsMap['is'] = "{{$for[" + bindedName + "] || 'default'}}";
         } else {
           attrsMap['is'] = "{{ $for[$root[$k]." + bindedName + "] || 'default' }}";
@@ -4829,7 +4824,7 @@ var component = {
     } else {
       var slotsName = getSlotsName(slots);
       var restSlotsName = slotsName ? (", " + slotsName) : '';
-      attrsMap['data'] = "{{...$root[$kk+" + mpcomid + "], $root" + restSlotsName + "}}";
+      attrsMap['data'] = "{{...$root[$kk+" + mpcomid + "], $root" + restSlotsName + scopeAttrStr + " }}";
       attrsMap['is'] = components[tag].name;
     }
     return ast
