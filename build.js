@@ -3566,7 +3566,7 @@ function genScopedSlot (
     "const _last = " + (el.slotScope) + ".mpcomidx === undefined ? '' : 'v' + " + (el.slotScope) + ".mpcomidx;\n" +
     "return " + (el.tag === 'template'
       ? genChildren(el, state) || 'void 0'
-      : genElement(el, state, { added: true })) + "}}"
+      : genElement(el, state, { needSuffix: true })) + "}}"
 }
 
 function genForScopedSlot (
@@ -3608,7 +3608,7 @@ function genChildren (
       ? getNormalizationType(children, state.maybeComponent)
       : 0;
     var gen = altGenNode || genNode;
-    return ("[" + (children.map(function (c) { return gen(c, state, withLast); }).join(',')) + "]" + (normalizationType ? ("," + normalizationType) : ''))
+    return ("[" + (children.map(function (c) { return gen(c, state, Object.assign({}, withLast)); }).join(',')) + "]" + (normalizationType ? ("," + normalizationType) : ''))
   }
 }
 
@@ -3698,14 +3698,14 @@ function genProps (props, withLast) {
   for (var i = 0; i < props.length; i++) {
     var prop = props[i];
     res += "\"" + (prop.name) + "\":" + (transformSpecialNewlines(prop.value));
-    if (!withLast.added && prop.name === 'mpcomid') {
+    if (withLast && withLast.needSuffix && prop.name === 'mpcomid') {
       consumed = true;
       res += '+_last ';
     }
     res += ',';
   }
   if (consumed) {
-    withLast.added = true;
+    withLast.needSuffix = false;
   }
   return res.slice(0, -1)
 }
