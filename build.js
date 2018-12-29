@@ -4789,10 +4789,19 @@ function tagBindingAttrs (attrsList, closestForNode) {
       scopeAttrs.push(("name: '" + value + "'"));
     }
     if (bindTarget === false) { return }
-    var pathStr = genKeyStr(value);
-    // 区分取变量方式：$root[$k].data 或 $root[$k][idx]
-    var varSep = pathStr[0] === '[' ? '' : '.';
-    var bindValStr = pathStr.startsWith('$scopedata') ? pathStr : ("" + varRootStr + varSep + pathStr);
+    var bindValStr;
+    if (typeof value !== 'string' || // 这几种条件直接取用，不替换。
+      /^[\d\.\-\+]+$/.test(value) || // 是数字，
+      ['true', 'false'].includes(value) || // 是布尔值
+      ['\'', '"', '{', '['].includes(value[0])) { // 是数组，字符串
+      // TODO 数组中可能要替换的变量，对象的动态key等
+      bindValStr = value;
+    } else {
+      var pathStr = genKeyStr(value);
+      // 区分取变量方式：$root[$k].data 或 $root[$k][idx]
+      var varSep = pathStr[0] === '[' ? '' : '.';
+      bindValStr = pathStr.startsWith('$scopedata') ? pathStr : ("" + varRootStr + varSep + pathStr);  
+    }
     if (bindTarget === '') {
       // v-bind="data" 情况
       scopeAttrs.push(("..." + bindValStr));
