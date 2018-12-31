@@ -4602,6 +4602,22 @@ var attrs = {
 };
 
 /**
+ * 转移字符串，输出至模板
+ * @param {*} valStr 静态字符串
+ */
+var attrValStringify = function (valStr) {
+  var i = 0;
+  while (valStr[i]) {
+    if (valStr[i - 1] !== '\\' && (valStr[i] === '"' || valStr[i] === "'")) {
+      valStr = (valStr.slice(0, i)) + "\\" + (valStr.slice(i));
+      i++;
+    }
+    i++;
+  }
+  return valStr
+};
+
+/**
  * 替换模板中的变量名为约定变量名
  * @param {string} alias 模板变量名
  * @param {string} aliasFull 约定变量名
@@ -4657,7 +4673,9 @@ var expressionReplacerFactory = function (
     .join('');
   var text = '';
   var _s = function (str) { return ("{{ " + str + " }}"); };
+  // 使用 ast提供的 expression 生成text
   try {
+    /* eslint no-eval: 0 */
     text = eval(textArr.join('').replace(/\n/g, '\\n'));
   } catch (e) {
     console.info(_s(text), e);
@@ -4743,10 +4761,7 @@ function getSlotsName (obj) {
   // wxml模板中 data="{{ a:{a1:'string2'}, b:'string'}}" 键a不能放在最后，会出错
   return tmplateSlotsObj(obj)
     .concat(
-      Object.keys(obj).map(function(k) {
-        return '$slot' + k + ":'" + obj[k] + "'"
-      })
-    )
+      Object.keys(obj).map(function (k) { return '$slot' + k + ":'" + obj[k] + "'"; }))
     .join(',')
 }
 
@@ -4756,13 +4771,16 @@ function tmplateSlotsObj (obj) {
   }
   // wxml模板中 data="{{ a:{a1:'string2'}, b:'string'}}" 键a1不能写成 'a1' 带引号的形式，会出错
   var $for = Object.keys(obj)
-    .map(function (k) {
-      return (k + ":'" + (obj[k]) + "'")
-    })
+    .map(function (k) { return (k + ":'" + (obj[k]) + "'"); })
     .join(',');
   return $for ? [("$for:{" + $for + "}")] : []
 }
 
+/**
+ * 将组件绑定的属性拼接到 $scopedata 中向下传
+ * @param {*} attrsList 绑定的属性值
+ * @param {*} closestForNode 最近一层的for节点（如果有）
+ */
 function tagBindingAttrs (attrsList, closestForNode) {
   var genKeyStr = function (v) { return v; };
   if (closestForNode) {
@@ -4786,21 +4804,21 @@ function tagBindingAttrs (attrsList, closestForNode) {
       bindTarget = name.slice('v-bind'.length + 1);
     } else {
       // 非动态绑定attr
-      scopeAttrs.push(("name: '" + value + "'"));
+      scopeAttrs.push((name + ": '" + (attrValStringify(value)) + "'"));
     }
     if (bindTarget === false) { return }
     var bindValStr;
     if (typeof value !== 'string' || // 这几种条件直接取用，不替换。
-      /^[\d\.\-\+]+$/.test(value) || // 是数字，
+      /^[+\-\d.]+$/.test(value) || // 是数字，
       ['true', 'false'].includes(value) || // 是布尔值
       ['\'', '"', '{', '['].includes(value[0])) { // 是数组，字符串
-      // TODO 数组中可能要替换的变量，对象的动态key等
+      // TODO 数组中存在变量，对象的动态key等可能迭代此方法进行替换
       bindValStr = value;
     } else {
       var pathStr = genKeyStr(value);
       // 区分取变量方式：$root[$k].data 或 $root[$k][idx]
       var varSep = pathStr[0] === '[' ? '' : '.';
-      bindValStr = pathStr.startsWith('$scopedata') ? pathStr : ("" + varRootStr + varSep + pathStr);  
+      bindValStr = pathStr.startsWith('$scopedata') ? pathStr : ("" + varRootStr + varSep + pathStr);
     }
     if (bindTarget === '') {
       // v-bind="data" 情况
