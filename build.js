@@ -4823,7 +4823,7 @@ function tagBindingAttrs (attrsList, closestForNode) {
     }
     if (bindTarget === false) { return }
 
-    if (/[\&\|\-\+\*\/\>\=\<\(\)]/.test(value)) {
+    if (/[\&\|\*\/\>\=\<\(\)]/.test(value)) {
       console.warn('忽略作用域数据表达式', name, value);
       return
     }
