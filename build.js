@@ -4808,11 +4808,13 @@ function tagBindingAttrs (attrsList, closestForNode) {
       // 使用v-model绑定时，简化为 :value 传入scope data
       name = ':value';
     }
-    if (name.startsWith('v-') || name.startsWith('@')) {
+    if ((name !== 'v-bind' && name.startsWith('v-')) || name.startsWith('@')) {
       // $scopedata 忽略 指令,事件绑定
       return
     }
-    name = camelize(name);
+    if (name !== 'v-bind') {
+      name = camelize(name);
+    }
     if (name.startsWith(':')) {
       bindTarget = name.slice(1);
     } else if (name.startsWith('v-bind')) {
