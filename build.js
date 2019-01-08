@@ -4803,7 +4803,6 @@ function tagBindingAttrs (attrsList, closestForNode) {
     var name = ref.name;
     var value = ref.value;
 
-    name = camelize(name);
     var bindTarget = false;
     if (name.startsWith('v-model')) {
       // 使用v-model绑定时，简化为 :value 传入scope data
@@ -4818,6 +4817,7 @@ function tagBindingAttrs (attrsList, closestForNode) {
       // 暂不支持作用域属性中表达式
       return
     }
+    name = camelize(name);
     if (name.startsWith(':')) {
       bindTarget = name.slice(1);
     } else if (name.startsWith('v-bind')) {
