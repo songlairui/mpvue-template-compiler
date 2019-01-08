@@ -4812,11 +4812,6 @@ function tagBindingAttrs (attrsList, closestForNode) {
       // $scopedata 忽略 指令,事件绑定
       return
     }
-    if (/[\-\+\*\/\>\=\<\(\)]/.test(value)) {
-      console.warn('暂不支持作用域数据', name, value);
-      // 暂不支持作用域属性中表达式
-      return
-    }
     name = camelize(name);
     if (name.startsWith(':')) {
       bindTarget = name.slice(1);
@@ -4827,6 +4822,11 @@ function tagBindingAttrs (attrsList, closestForNode) {
       scopeAttrs.push((name + ": '" + (attrValStringify(value)) + "'"));
     }
     if (bindTarget === false) { return }
+
+    if (/[\&\|\-\+\*\/\>\=\<\(\)]/.test(value)) {
+      console.warn('忽略作用域数据表达式', name, value);
+      return
+    }
     var bindValStr;
     if (typeof value !== 'string' || // 这几种条件直接取用，不替换。
       /^[+\-\d.]+$/.test(value) || // 是数字，
@@ -4844,6 +4844,10 @@ function tagBindingAttrs (attrsList, closestForNode) {
       // v-bind="data" 情况
       scopeAttrs.push(("..." + bindValStr));
     } else {
+      // 将 ! 前置
+      if (bindValStr.indexOf('!') > -1) {
+        bindValStr = "!" + (bindValStr.replace('!', ''));
+      }
       // v-bind:something="varible" 情况
       scopeAttrs.push((bindTarget + ": " + bindValStr));
     }
